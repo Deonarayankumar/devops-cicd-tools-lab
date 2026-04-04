@@ -1,11 +1,70 @@
+@Library('devops-cicd-tools-lab') _
+
 pipeline {
     agent any
+
+    environment {
+        APP_NAME = 'devops-cicd-tools-lab'
+        PYTHON_VERSION = '3.11'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
             }
+        }
+
+        stage('Build & Test') {
+            steps {
+                buildPython(
+                    requirementsFile: 'app/requirements.txt',
+                    testCommand: 'pytest tests/ -q'
+                )
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    sh 'sonar-scanner'
+                }
+            }
+        }
+
+        stage('Package') {
+            steps {
+                sh '''
+                    mkdir -p dist
+                    tar -czf dist/${APP_NAME}-${BUILD_NUMBER}.tar.gz app/ tests/
+                '''
+            }
+        }
+
+        stage('Publish to JFrog') {
+            steps {
+                withCredentials([string(credentialsId: 'jfrog-api-key', variable: 'JFROG_API_KEY')]) {
+                    sh './scripts/jfrog-upload.sh dist/${APP_NAME}-${BUILD_NUMBER}.tar.gz'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline succeeded for ${APP_NAME} build ${BUILD_NUMBER}"
+        }
+        failure {
+            echo "Pipeline failed — see rollback runbook in docs/rollback-runbook.md"
+        }
+        always {
+            cleanWs()
         }
     }
 }
